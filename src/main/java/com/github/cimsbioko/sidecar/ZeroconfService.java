@@ -39,7 +39,7 @@ public class ZeroconfService {
     public void onContentReady(ContentReady event) throws IOException {
         log.info("registering zeroconf service");
         registry.unregisterAllServices();
-        registry.registerService(create(SERVICE_TYPE, "sidecar-" + port, port, event.getContent().getContentHash()));
+        registry.registerService(create(SERVICE_TYPE, "sidecar", port, event.getContent().getContentHash()));
     }
 
     @PreDestroy
