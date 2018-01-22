@@ -16,10 +16,12 @@ import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import javax.jmdns.ServiceInfo;
 import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
@@ -52,6 +54,8 @@ public class ContentService {
 
     @Value("${app.download.url}")
     private URL downloadUri;
+
+    private URL sideloadUri;
 
     @Value("${app.download.username}")
     private String username;
@@ -145,19 +149,7 @@ public class ContentService {
     @EventListener
     public FetchEvent onUpdateRequested(UpdateRequested event) throws IOException {
 
-        Content existing = event.getExisting();
-
-        String creds = getBasicAuthCreds(username, password);
-
-        RequestFactory factory;
-        if (existing != null) {
-            String accept = String.join(", ", METADATA_MEDIATYPE, DB_MEDIATYPE);
-            factory = new RequestFactory(downloadUri, accept, creds, existing.getContentHash());
-        } else {
-            factory = new RequestFactory(downloadUri, DB_MEDIATYPE, creds);
-        }
-
-        Request request = factory.create();
+        Request request = getDownloadRequestFactory(event.getExisting()).create();
 
         switch (request.getResponseCode()) {
             case SC_NOT_MODIFIED:
@@ -201,8 +193,7 @@ public class ContentService {
         Metadata metadata = loadMetadata(event.getMetadata());
         log.info("incremental: {}", encodeHexString(metadata.getFileHash()));
         Path newDb = Files.createTempFile(content.toPath().getParent(), "database-", ".db");
-        RequestFactory rangeFactory = new RequestFactory(downloadUri, DB_MEDIATYPE, getBasicAuthCreds(username, password));
-        ZSync.sync(metadata, content, newDb.toFile(), rangeFactory);
+        ZSync.sync(metadata, content, newDb.toFile(), getSyncRequestFactory());
         return new ContentAvailable(newDb.toFile(), event.getMetadata());
     }
 
@@ -211,5 +202,43 @@ public class ContentService {
         Metadata metadata = loadMetadata(event.getMetadata());
         log.info("full download: {}", encodeHexString(metadata.getFileHash()));
         return new ContentAvailable(event.getDatabase(), event.getMetadata());
+    }
+
+
+    @EventListener
+    public void onPrimaryChanged(ZeroconfPrimaryChanged event) throws MalformedURLException {
+        if (event.isServicePrimary()) {
+            sideloadUri = null;
+        } else {
+            ServiceInfo primary = event.getPrimaryServiceInfo();
+            String[] primaryUrls = primary.getURLs();
+            if (primaryUrls.length > 0) {
+                sideloadUri = new URL(primaryUrls[0]);
+            } else {
+                log.warn("primary without urls: {}", primary);
+            }
+        }
+        log.info("syncing to: {}", getURL());
+    }
+
+    private URL getURL() {
+        return sideloadUri != null ? sideloadUri : downloadUri;
+    }
+
+    private String getCreds() {
+        return sideloadUri != null ? null : getBasicAuthCreds(username, password);
+    }
+
+    private RequestFactory getDownloadRequestFactory(Content existing) {
+        if (existing != null) {
+            String accept = String.join(", ", METADATA_MEDIATYPE, DB_MEDIATYPE);
+            return new RequestFactory(getURL(), accept, getCreds(), existing.getContentHash());
+        } else {
+            return new RequestFactory(getURL(), DB_MEDIATYPE, getCreds());
+        }
+    }
+
+    private RequestFactory getSyncRequestFactory() {
+        return new RequestFactory(getURL(), DB_MEDIATYPE, getCreds());
     }
 }
