@@ -3,8 +3,8 @@ package com.github.cimsbioko.sidecar;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.context.embedded.EmbeddedServletContainerInitializedEvent;
-import org.springframework.context.ApplicationListener;
+import org.springframework.boot.context.embedded.EmbeddedServletContainerCustomizer;
+import org.springframework.boot.context.embedded.MimeMappings;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.event.ApplicationEventMulticaster;
 import org.springframework.context.event.SimpleApplicationEventMulticaster;
@@ -58,5 +58,15 @@ public class Application {
         SimpleApplicationEventMulticaster multicaster = new SimpleApplicationEventMulticaster();
         multicaster.setTaskExecutor(eventTaskExecutor());
         return multicaster;
+    }
+
+    @Bean
+    public EmbeddedServletContainerCustomizer mimeTypeCustomizer() {
+        return (container) -> {
+            MimeMappings mappings = new MimeMappings(MimeMappings.DEFAULT);
+            mappings.add("db", "application/x-sqlite3");
+            mappings.add("jrsmd", "application/vnd.jrsync+jrsmd");
+            container.setMimeMappings(mappings);
+        };
     }
 }
