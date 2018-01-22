@@ -18,6 +18,7 @@ import static javax.jmdns.ServiceInfo.create;
 public class ZeroconfService {
 
     private static final Logger log = LoggerFactory.getLogger(ZeroconfService.class);
+    private static final String SERVICE_TYPE = "_cimssc._tcp.local.";
 
     private int port;
 
@@ -38,7 +39,7 @@ public class ZeroconfService {
     public void onContentReady(ContentReady event) throws IOException {
         log.info("registering zeroconf service");
         registry.unregisterAllServices();
-        registry.registerService(create("_cimssc._tcp.local.", "sidecar-" + port, port, event.getContent().getContentHash()));
+        registry.registerService(create(SERVICE_TYPE, "sidecar-" + port, port, event.getContent().getContentHash()));
     }
 
     @PreDestroy
