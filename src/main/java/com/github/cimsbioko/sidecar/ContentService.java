@@ -61,8 +61,7 @@ public class ContentService {
 
     private Content verified;
 
-
-    @Scheduled(fixedDelay = 30 * 60 * 1000, initialDelay = 30 * 1000)
+    @Scheduled(fixedDelay = 30 * 60 * 1000, initialDelay = 5 * 60 * 1000)
     public void requestUpdate() {
         eventPublisher.publishEvent(new UpdateRequested(verified));
     }
