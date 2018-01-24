@@ -28,7 +28,5 @@ start it.
 To start a sidecar service on your local network, you just need to run the jar:
 
 ```shell
-java -jar cims-sidecar-<version>.jar \
-          --app.download.username=<cims-user> \
-          --app.download.password=<cims-password>
+java -jar cims-sidecar-<version>.jar
 ```
