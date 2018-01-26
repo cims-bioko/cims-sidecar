@@ -31,6 +31,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 
 import static java.nio.file.Files.createTempFile;
+import static java.nio.file.Files.deleteIfExists;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 import static javax.servlet.http.HttpServletResponse.*;
 import static org.apache.commons.codec.binary.Base64.encodeBase64String;
@@ -87,10 +88,9 @@ public class ContentService {
     }
 
     @EventListener
-    public ContentVerified onContentAvailable(ContentAvailable event) throws IOException, NoSuchAlgorithmException {
+    public Object onContentAvailable(ContentAvailable event) throws IOException, NoSuchAlgorithmException {
         Metadata metadata = loadMetadata(event.getMetadata());
-        byte[] metadataHash = metadata.getFileHash(),
-                computedHash = computeHash(event.getContent(), metadata.getFileHashAlg());
+        byte[] metadataHash = metadata.getFileHash(), computedHash = computeHash(event.getContent(), metadata.getFileHashAlg());
         String contentHash = encodeHexString(computedHash);
         if (Arrays.equals(metadataHash, computedHash)) {
             log.info("content verified");
@@ -100,12 +100,13 @@ public class ContentService {
             if (log.isWarnEnabled()) {
                 log.warn("content failed verification: expected {}, computed {}", encodeHexString(metadataHash), contentHash);
             }
-            return null;
+            return new SyncFailure("content verification failed, cleaning up", null,
+                    event.getContent().toPath(), event.getMetadata().toPath());
         }
     }
 
     @EventListener
-    public ContentReady onContentVerified(ContentVerified event) {
+    public Object onContentVerified(ContentVerified event) {
         log.info("installing content {}", event.getContent().getContentHash());
         Content confirmed = event.getContent();
         if (confirmed.getContentFile().renameTo(content)) {
@@ -117,7 +118,134 @@ public class ContentService {
         } else {
             log.warn("failed to move content: {} to {}", confirmed.getContentFile(), content);
         }
+        return new SyncFailure("failure installing content, cleaning up", null, content.toPath(), metadata.toPath());
+    }
+
+    @EventListener
+    public void onContentReady(ContentReady event) {
+        log.info("publishing content {}", event.getContent().getContentHash());
+        verified = event.getContent();
+    }
+
+    @EventListener
+    public FetchEvent onUpdateRequested(UpdateRequested event) throws IOException {
+
+        Request request = getDownloadRequestFactory(event.getExisting()).create();
+
+        switch (request.getResponseCode()) {
+            case SC_NOT_MODIFIED:
+                log.info("no new content");
+                break;
+            case SC_OK:
+                Path contentParent = content.toPath().getParent();
+                if (request.getContentType().contains(METADATA_MEDIATYPE)) {
+                    log.info("fetching metadata");
+                    Path newMeta = createTempFile(contentParent, "metadata-", "." + Metadata.FILE_EXT);
+                    try {
+                        Files.copy(request.getInputStream(), newMeta, REPLACE_EXISTING);
+                        return new MetadataFetched(newMeta.toFile());
+                    } catch (IOException e) {
+                        return new SyncFailure("metadata fetch failed", e, newMeta);
+                    }
+                } else if (request.getContentType().contains(DB_MEDIATYPE)) {
+                    log.info("fetching database");
+                    Path newDb = createTempFile(contentParent, "database-", ".db");
+                    try {
+                        try (MetadataInputWrapper wrapper = new MetadataInputWrapper(request.getInputStream(), "", 65536, "MD5", "MD5", contentParent.toFile())) {
+                            Files.copy(wrapper, newDb, REPLACE_EXISTING);
+                            return new DatabaseFetched(wrapper.getMetadataFile(), newDb.toFile());
+                        } catch (IOException e) {
+                            return new SyncFailure("database fetch failed", e, newDb);
+                        }
+                    } catch (NoSuchAlgorithmException e) {
+                        log.error("failure downloading content", e);
+                    }
+                }
+                break;
+            case SC_NOT_FOUND:
+                log.info("not found");
+            default:
+                log.info("unknown response: {}", request.getResponseCode());
+        }
+
         return null;
+    }
+
+    @EventListener
+    public Object onMetadataFetched(MetadataFetched event) throws IOException, NoSuchAlgorithmException {
+        Metadata metadata = loadMetadata(event.getMetadata());
+        log.info("incremental: {}", encodeHexString(metadata.getFileHash()));
+        Path newDb = createTempFile(content.toPath().getParent(), "database-", ".db");
+        try {
+            ZSync.sync(metadata, content, newDb.toFile(), getSyncRequestFactory());
+            return new ContentAvailable(newDb.toFile(), event.getMetadata());
+        } catch (Throwable t) {
+            return new SyncFailure("sync failed", t, newDb);
+        }
+    }
+
+    @EventListener
+    public ContentAvailable onDatabaseFetched(DatabaseFetched event) throws IOException, NoSuchAlgorithmException {
+        if (log.isInfoEnabled()) {
+            Metadata metadata = loadMetadata(event.getMetadata());
+            log.info("full download: {}", encodeHexString(metadata.getFileHash()));
+        }
+        return new ContentAvailable(event.getDatabase(), event.getMetadata());
+    }
+
+    @EventListener
+    public void onPrimaryChanged(ZeroconfPrimaryChanged event) throws MalformedURLException {
+        if (event.isServicePrimary()) {
+            sideloadUri = null;
+        } else {
+            ServiceInfo primary = event.getPrimaryServiceInfo();
+            String[] primaryUrls = primary.getURLs();
+            if (primaryUrls.length > 0) {
+                sideloadUri = new URL(primaryUrls[0]);
+            } else {
+                log.warn("primary without urls: {}", primary);
+            }
+        }
+        log.info("syncing from: {}", getURL());
+    }
+
+    @EventListener
+    public void onSyncFailure(SyncFailure event) throws IOException {
+        if (event.getFailure() != null) {
+            log.warn(event.getMessage(), event.getFailure());
+        } else {
+            log.warn(event.getMessage());
+        }
+        cleanupFiles(event.getTempFiles());
+    }
+
+    private void cleanupFiles(Path... filesToRemove) throws IOException {
+        for (Path p : filesToRemove) {
+            if (!deleteIfExists(p)) {
+                log.warn("failed to delete file {}", p);
+            }
+        }
+    }
+
+    private URL getURL() {
+        return sideloadUri != null ? sideloadUri : downloadUri;
+    }
+
+    private String getCreds() {
+        return sideloadUri != null ? null : getBasicAuthCreds(username, password);
+    }
+
+    private RequestFactory getDownloadRequestFactory(Content existing) {
+        if (existing != null) {
+            String accept = String.join(", ", METADATA_MEDIATYPE, DB_MEDIATYPE);
+            return new RequestFactory(getURL(), accept, getCreds(), existing.getContentHash());
+        } else {
+            return new RequestFactory(getURL(), DB_MEDIATYPE, getCreds());
+        }
+    }
+
+    private RequestFactory getSyncRequestFactory() {
+        return new RequestFactory(getURL(), DB_MEDIATYPE, getCreds());
     }
 
     private byte[] computeHash(File content, String fileHashAlg) throws NoSuchAlgorithmException, IOException {
@@ -141,105 +269,7 @@ public class ContentService {
         }
     }
 
-    @EventListener
-    public void onContentReady(ContentReady event) {
-        log.info("publishing content {}", event.getContent().getContentHash());
-        verified = event.getContent();
-    }
-
-    @EventListener
-    public FetchEvent onUpdateRequested(UpdateRequested event) throws IOException {
-
-        Request request = getDownloadRequestFactory(event.getExisting()).create();
-
-        switch (request.getResponseCode()) {
-            case SC_NOT_MODIFIED:
-                log.info("no new content");
-                break;
-            case SC_OK:
-                Path contentParent = content.toPath().getParent();
-                if (request.getContentType().contains(METADATA_MEDIATYPE)) {
-                    log.info("fetching metadata");
-                    Path newMeta = createTempFile(contentParent, "metadata-", "." + Metadata.FILE_EXT);
-                    Files.copy(request.getInputStream(), newMeta, REPLACE_EXISTING);
-                    return new MetadataFetched(newMeta.toFile());
-                } else if (request.getContentType().contains(DB_MEDIATYPE)) {
-                    log.info("fetching database");
-                    Path newDb = createTempFile(contentParent, "database-", ".db");
-                    try {
-                        try (MetadataInputWrapper wrapper = new MetadataInputWrapper(request.getInputStream(), "", 65536, "MD5", "MD5", contentParent.toFile())) {
-                            Files.copy(wrapper, newDb, REPLACE_EXISTING);
-                            return new DatabaseFetched(wrapper.getMetadataFile(), newDb.toFile());
-                        }
-                    } catch (NoSuchAlgorithmException e) {
-                        log.error("failure downloading content", e);
-                    }
-                }
-                break;
-            case SC_NOT_FOUND:
-                log.info("not found");
-            default:
-                log.info("unknown response: {}", request.getResponseCode());
-        }
-
-        return null;
-    }
-
     private String getBasicAuthCreds(String username, String password) {
         return "Basic " + encodeBase64String((username + ":" + password).getBytes(Charset.forName("US-ASCII")));
-    }
-
-    @EventListener
-    public ContentAvailable onMetadataFetched(MetadataFetched event) throws IOException, NoSuchAlgorithmException, InterruptedException {
-        Metadata metadata = loadMetadata(event.getMetadata());
-        log.info("incremental: {}", encodeHexString(metadata.getFileHash()));
-        Path newDb = createTempFile(content.toPath().getParent(), "database-", ".db");
-        ZSync.sync(metadata, content, newDb.toFile(), getSyncRequestFactory());
-        return new ContentAvailable(newDb.toFile(), event.getMetadata());
-    }
-
-    @EventListener
-    public ContentAvailable onDatabaseFetched(DatabaseFetched event) throws IOException, NoSuchAlgorithmException {
-        Metadata metadata = loadMetadata(event.getMetadata());
-        log.info("full download: {}", encodeHexString(metadata.getFileHash()));
-        return new ContentAvailable(event.getDatabase(), event.getMetadata());
-    }
-
-
-    @EventListener
-    public void onPrimaryChanged(ZeroconfPrimaryChanged event) throws MalformedURLException {
-        if (event.isServicePrimary()) {
-            sideloadUri = null;
-        } else {
-            ServiceInfo primary = event.getPrimaryServiceInfo();
-            String[] primaryUrls = primary.getURLs();
-            if (primaryUrls.length > 0) {
-                sideloadUri = new URL(primaryUrls[0]);
-            } else {
-                log.warn("primary without urls: {}", primary);
-            }
-        }
-        log.info("syncing to: {}", getURL());
-    }
-
-    private URL getURL() {
-        return sideloadUri != null ? sideloadUri : downloadUri;
-    }
-
-    private String getCreds() {
-        return sideloadUri != null ? null : getBasicAuthCreds(username, password);
-    }
-
-    private RequestFactory getDownloadRequestFactory(Content existing) {
-        if (existing != null) {
-            String accept = String.join(", ", METADATA_MEDIATYPE, DB_MEDIATYPE);
-            return new RequestFactory(getURL(), accept, getCreds(), existing.getContentHash());
-        } else {
-            return new RequestFactory(getURL(), DB_MEDIATYPE, getCreds());
-        }
-    }
-
-    private RequestFactory getSyncRequestFactory() {
-        return new RequestFactory(getURL(), DB_MEDIATYPE, getCreds());
     }
 }
