@@ -30,6 +30,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 
+import static java.nio.file.Files.createTempFile;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 import static javax.servlet.http.HttpServletResponse.*;
 import static org.apache.commons.codec.binary.Base64.encodeBase64String;
@@ -159,12 +160,12 @@ public class ContentService {
                 Path contentParent = content.toPath().getParent();
                 if (request.getContentType().contains(METADATA_MEDIATYPE)) {
                     log.info("fetching metadata");
-                    Path newMeta = Files.createTempFile(contentParent, "metadata-", "." + Metadata.FILE_EXT);
+                    Path newMeta = createTempFile(contentParent, "metadata-", "." + Metadata.FILE_EXT);
                     Files.copy(request.getInputStream(), newMeta, REPLACE_EXISTING);
                     return new MetadataFetched(newMeta.toFile());
                 } else if (request.getContentType().contains(DB_MEDIATYPE)) {
                     log.info("fetching database");
-                    Path newDb = Files.createTempFile(contentParent, "database-", ".db");
+                    Path newDb = createTempFile(contentParent, "database-", ".db");
                     try {
                         try (MetadataInputWrapper wrapper = new MetadataInputWrapper(request.getInputStream(), "", 65536, "MD5", "MD5", contentParent.toFile())) {
                             Files.copy(wrapper, newDb, REPLACE_EXISTING);
@@ -192,7 +193,7 @@ public class ContentService {
     public ContentAvailable onMetadataFetched(MetadataFetched event) throws IOException, NoSuchAlgorithmException, InterruptedException {
         Metadata metadata = loadMetadata(event.getMetadata());
         log.info("incremental: {}", encodeHexString(metadata.getFileHash()));
-        Path newDb = Files.createTempFile(content.toPath().getParent(), "database-", ".db");
+        Path newDb = createTempFile(content.toPath().getParent(), "database-", ".db");
         ZSync.sync(metadata, content, newDb.toFile(), getSyncRequestFactory());
         return new ContentAvailable(newDb.toFile(), event.getMetadata());
     }
