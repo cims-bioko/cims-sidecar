@@ -102,21 +102,25 @@ public class ContentService {
     }
 
     @EventListener
-    public Object onContentAvailable(ContentAvailable event) throws IOException, NoSuchAlgorithmException {
-        Metadata metadata = loadMetadata(event.getMetadata());
-        byte[] metadataHash = metadata.getFileHash(), computedHash = computeHash(event.getContent(), metadata.getFileHashAlg());
-        String contentHash = encodeHexString(computedHash);
-        if (Arrays.equals(metadataHash, computedHash)) {
-            log.info("content verified");
-            Content confirmed = new Content(contentHash, event.getContent(), event.getMetadata());
-            return new ContentVerified(confirmed);
-        } else {
-            counters.increment(VERIFY_FAILURES_METRIC);
-            if (log.isWarnEnabled()) {
-                log.warn("content failed verification: expected {}, computed {}", encodeHexString(metadataHash), contentHash);
+    public Object onContentAvailable(ContentAvailable event) {
+        try {
+            Metadata metadata = loadMetadata(event.getMetadata());
+            byte[] metadataHash = metadata.getFileHash(), computedHash = computeHash(event.getContent(), metadata.getFileHashAlg());
+            String contentHash = encodeHexString(computedHash);
+            if (Arrays.equals(metadataHash, computedHash)) {
+                log.info("content verified");
+                Content confirmed = new Content(contentHash, event.getContent(), event.getMetadata());
+                return new ContentVerified(confirmed);
+            } else {
+                counters.increment(VERIFY_FAILURES_METRIC);
+                if (log.isWarnEnabled()) {
+                    log.warn("content failed verification: expected {}, computed {}", encodeHexString(metadataHash), contentHash);
+                }
+                return new SyncFailure("content verification failed, cleaning up", null,
+                        event.getContent().toPath(), event.getMetadata().toPath());
             }
-            return new SyncFailure("content verification failed, cleaning up", null,
-                    event.getContent().toPath(), event.getMetadata().toPath());
+        } catch (Exception e) {
+            return new SyncFailure("content verification failed", e);
         }
     }
 
