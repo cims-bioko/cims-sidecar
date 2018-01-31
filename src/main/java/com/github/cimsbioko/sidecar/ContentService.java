@@ -254,7 +254,7 @@ public class ContentService {
                 log.warn("primary without urls: {}", primary);
             }
         }
-        log.info("syncing from: {}", getURL());
+        log.info("zeroconf change, sync endpoint: {}", getURL());
     }
 
     @EventListener
