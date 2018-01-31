@@ -233,9 +233,11 @@ public class ContentService {
     }
 
     private void cleanupFiles(Path... filesToRemove) throws IOException {
-        for (Path p : filesToRemove) {
-            if (!deleteIfExists(p)) {
-                log.warn("failed to delete file {}", p);
+        if (filesToRemove != null) {
+            for (Path p : filesToRemove) {
+                if (!deleteIfExists(p)) {
+                    log.warn("failed to delete file {}", p);
+                }
             }
         }
     }
