@@ -108,4 +108,8 @@ public class ZeroconfService implements ServiceListener {
         log.info("stopping zeroconf");
         registry.unregisterAllServices();
     }
+
+    public String getStatus() {
+        return registry.toString();
+    }
 }
