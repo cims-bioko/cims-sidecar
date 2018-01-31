@@ -49,6 +49,7 @@ public class ContentService {
     private static final String INSTALL_FAILURES_METRIC = "updates.installed";
     private static final String UPDATE_FAILURES_METRIC = "updates.failed";
     private static final String UPDATE_NO_CHANGE_METRIC = "updates.nochange";
+    private static final String UPDATE_IGNORED_METRIC = "updates.ignored";
 
     private static final Logger log = LoggerFactory.getLogger(ContentService.class);
 
@@ -80,10 +81,31 @@ public class ContentService {
 
     private Content verified;
 
+    private String updating;
+
+    private boolean isUpdating() {
+        return updating != null;
+    }
+
+    private void setUpdating(Content c) {
+        updating = c == null ? "missing content" : c.getContentHash();
+    }
+
+    private void clearUpdating() {
+        updating = null;
+    }
+
     @Scheduled(fixedDelay = 30 * 60 * 1000, initialDelay = 5 * 60 * 1000)
     public void requestUpdate() {
         counters.increment(UPDATE_REQUEST_METRIC);
-        eventPublisher.publishEvent(new UpdateRequested(verified));
+        if (isUpdating()) {
+            log.info("update to {} in progress, ignoring update request", updating);
+            counters.increment(UPDATE_IGNORED_METRIC);
+        } else {
+            setUpdating(verified);
+            log.info("requesting update to {}", updating);
+            eventPublisher.publishEvent(new UpdateRequested(verified));
+        }
     }
 
     public Content getContent() {
@@ -96,9 +118,14 @@ public class ContentService {
             log.info("existing content available");
             return new ContentAvailable(content, metadata);
         } else {
-            log.info("existing content insufficient, requesting update");
-            return new UpdateRequested();
+            log.info("existing content insufficient");
+            return new ContentMissing();
         }
+    }
+
+    @EventListener
+    public void onContentMissing(ContentMissing event) {
+        requestUpdate();
     }
 
     @EventListener
@@ -145,6 +172,7 @@ public class ContentService {
     public void onContentReady(ContentReady event) {
         log.info("publishing content {}", event.getContent().getContentHash());
         verified = event.getContent();
+        clearUpdating();
     }
 
     @EventListener
@@ -154,7 +182,6 @@ public class ContentService {
 
         switch (request.getResponseCode()) {
             case SC_NOT_MODIFIED:
-                counters.increment(UPDATE_NO_CHANGE_METRIC);
                 log.info("no new content");
                 return new SyncUnnecessary();
             case SC_OK:
@@ -239,6 +266,13 @@ public class ContentService {
             log.warn(event.getMessage());
         }
         cleanupFiles(event.getTempFiles());
+        clearUpdating();
+    }
+
+    @EventListener
+    public void onSyncUnncessary(SyncUnnecessary event) throws IOException {
+        counters.increment(UPDATE_NO_CHANGE_METRIC);
+        clearUpdating();
     }
 
     private void cleanupFiles(Path... filesToRemove) throws IOException {
