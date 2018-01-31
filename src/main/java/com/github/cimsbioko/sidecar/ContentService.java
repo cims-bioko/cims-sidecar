@@ -182,27 +182,32 @@ public class ContentService {
     }
 
     @EventListener
-    public Object onMetadataFetched(MetadataFetched event) throws IOException, NoSuchAlgorithmException {
+    public Object onMetadataFetched(MetadataFetched event) {
         counters.increment(METADATA_FETCHES_METRIC);
-        Metadata metadata = loadMetadata(event.getMetadata());
-        log.info("incremental: {}", encodeHexString(metadata.getFileHash()));
-        Path newDb = createTempFile(content.toPath().getParent(), "database-", ".db");
+        Path newDb = null;
         try {
+            Metadata metadata = loadMetadata(event.getMetadata());
+            log.info("incremental: {}", encodeHexString(metadata.getFileHash()));
+            newDb = createTempFile(content.toPath().getParent(), "database-", ".db");
             ZSync.sync(metadata, content, newDb.toFile(), getSyncRequestFactory());
             return new ContentAvailable(newDb.toFile(), event.getMetadata());
-        } catch (Throwable t) {
-            return new SyncFailure("sync failed", t, newDb);
+        } catch (Exception e) {
+            return newDb != null ? new SyncFailure("sync failed", e, newDb) : new SyncFailure("sync failed", e);
         }
     }
 
     @EventListener
-    public ContentAvailable onDatabaseFetched(DatabaseFetched event) throws IOException, NoSuchAlgorithmException {
+    public Object onDatabaseFetched(DatabaseFetched event) {
         counters.increment(DATABASE_FETCHES_METRIC);
-        if (log.isInfoEnabled()) {
-            Metadata metadata = loadMetadata(event.getMetadata());
-            log.info("full download: {}", encodeHexString(metadata.getFileHash()));
+        try {
+            if (log.isInfoEnabled()) {
+                Metadata metadata = loadMetadata(event.getMetadata());
+                log.info("full download: {}", encodeHexString(metadata.getFileHash()));
+            }
+            return new ContentAvailable(event.getDatabase(), event.getMetadata());
+        } catch (Exception e) {
+            return new SyncFailure("sync failed", e);
         }
-        return new ContentAvailable(event.getDatabase(), event.getMetadata());
     }
 
     @EventListener
