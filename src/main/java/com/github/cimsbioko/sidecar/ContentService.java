@@ -34,7 +34,8 @@ import java.util.Arrays;
 import static java.nio.file.Files.createTempFile;
 import static java.nio.file.Files.deleteIfExists;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
-import static javax.servlet.http.HttpServletResponse.*;
+import static javax.servlet.http.HttpServletResponse.SC_NOT_MODIFIED;
+import static javax.servlet.http.HttpServletResponse.SC_OK;
 import static org.apache.commons.codec.binary.Base64.encodeBase64String;
 import static org.apache.commons.codec.binary.Hex.encodeHexString;
 
@@ -164,15 +165,11 @@ public class ContentService {
                 } else if (request.getContentType().contains(DB_MEDIATYPE)) {
                     log.info("fetching database");
                     Path newDb = createTempFile(contentParent, "database-", ".db");
-                    try {
-                        try (MetadataInputWrapper wrapper = new MetadataInputWrapper(request.getInputStream(), "", 65536, "MD5", "MD5", contentParent.toFile())) {
-                            Files.copy(wrapper, newDb, REPLACE_EXISTING);
-                            return new DatabaseFetched(wrapper.getMetadataFile(), newDb.toFile());
-                        } catch (IOException e) {
-                            return new SyncFailure("database fetch failed", e, newDb);
-                        }
-                    } catch (NoSuchAlgorithmException e) {
-                        log.error("failure downloading content", e);
+                    try (MetadataInputWrapper wrapper = new MetadataInputWrapper(request.getInputStream(), "", 65536, "MD5", "MD5", contentParent.toFile())) {
+                        Files.copy(wrapper, newDb, REPLACE_EXISTING);
+                        return new DatabaseFetched(wrapper.getMetadataFile(), newDb.toFile());
+                    } catch (NoSuchAlgorithmException | IOException e) {
+                        return new SyncFailure("database fetch failed", e, newDb);
                     }
                 }
                 break;
