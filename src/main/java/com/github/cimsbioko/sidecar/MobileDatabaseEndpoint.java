@@ -2,6 +2,7 @@ package com.github.cimsbioko.sidecar;
 
 import com.github.batkinson.jrsync.Metadata;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.actuate.metrics.CounterService;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.stereotype.Controller;
 import org.springframework.util.StreamUtils;
@@ -21,6 +22,17 @@ import static com.github.cimsbioko.sidecar.Application.CACHED_FILES_PATH;
 @Controller
 public class MobileDatabaseEndpoint {
 
+    private static final String DB_UPDATES_METRIC = "updates.manual";
+    private static final String DB_DOWNLOADS_METRIC = "downloads";
+    private static final String DB_NO_CONTENT_METRIC = "downloads.nocontent";
+    private static final String DB_NOT_MODIFIED_METRIC = "downloads.notmodified";
+    private static final String METADATA_METRIC = "downloads.metadata";
+    private static final String DATABASE_METRIC = "downloads.database";
+    private static final String EXPORTS_METRIC = "exports";
+    private static final String EXPORTS_NO_CONTENT_METRIC = "exports.nocontent";
+    private static final String EXPORTS_NOT_READABLE_METRIC = "exports.notreadable";
+    private static final String EXPORTS_FINISHED_METRIC = "exports.finished";
+
     private static final String ACCEPT = "Accept";
     private static final String MOBILEDB_PATH = "/api/rest/mobiledb";
     private static final String SQLITE_MIME_TYPE = "application/x-sqlite3";
@@ -30,23 +42,31 @@ public class MobileDatabaseEndpoint {
     @Autowired
     private ContentService manager;
 
+    @Autowired
+    private CounterService counters;
+
     @RequestMapping(value = "/update", method = RequestMethod.GET)
     @ResponseBody
     public String requestUpdate() {
         manager.requestUpdate();
+        counters.increment(DB_UPDATES_METRIC);
         return null;
     }
 
     @RequestMapping(value = MOBILEDB_PATH, method = RequestMethod.GET, produces = {SQLITE_MIME_TYPE, Metadata.MIME_TYPE})
     public String mobileDB(WebRequest request) {
 
+        counters.increment(DB_DOWNLOADS_METRIC);
+
         Content content = manager.getContent();
 
         if (content == null) {
+            counters.increment(DB_NO_CONTENT_METRIC);
             return null;
         }
 
         if (request.checkNotModified(content.getContentHash())) {
+            counters.increment(DB_NOT_MODIFIED_METRIC);
             return null;
         }
 
@@ -54,25 +74,30 @@ public class MobileDatabaseEndpoint {
         String accept = request.getHeader(ACCEPT);
 
         if (accept != null && accept.contains(Metadata.MIME_TYPE) && metadata.exists()) {
+            counters.increment(METADATA_METRIC);
             return "forward:" + CACHED_FILES_PATH + "/" + metadata.getName();
         }
+        counters.increment(DATABASE_METRIC);
         return "forward:" + CACHED_FILES_PATH + "/" + content.getContentFile().getName();
     }
 
     @RequestMapping(value = MOBILEDB_EXPORT_PATH, method = RequestMethod.GET)
     public void browserExport(HttpServletResponse response) throws IOException {
 
+        counters.increment(EXPORTS_METRIC);
+
         Content content = manager.getContent();
 
         if (content == null || content.getContentFile() == null || !content.getContentFile().exists()) {
-            response.sendError(HttpServletResponse.SC_NOT_FOUND,
-                    "No content found.");
+            counters.increment(EXPORTS_NO_CONTENT_METRIC);
+            response.sendError(HttpServletResponse.SC_NOT_FOUND, "No content found.");
             return;
         }
 
         FileSystemResource dbFileRes = new FileSystemResource(content.getContentFile());
 
         if (!dbFileRes.isReadable()) {
+            counters.increment(EXPORTS_NOT_READABLE_METRIC);
             response.sendError(HttpServletResponse.SC_NOT_FOUND, "Content not readable.");
         } else {
             response.setContentType("application/zip");
@@ -86,6 +111,7 @@ public class MobileDatabaseEndpoint {
                 zOut.closeEntry();
                 zOut.finish();
             }
+            counters.increment(EXPORTS_FINISHED_METRIC);
         }
     }
 }

@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.actuate.metrics.CounterService;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
@@ -40,6 +41,13 @@ import static org.apache.commons.codec.binary.Hex.encodeHexString;
 @Component
 public class ContentService {
 
+    private static final String UPDATE_REQUEST_METRIC = "updates.total";
+    private static final String METADATA_FETCHES_METRIC = "fetches.metadata";
+    private static final String DATABASE_FETCHES_METRIC = "fetches.database";
+    private static final String VERIFY_FAILURES_METRIC = "updates.verified";
+    private static final String INSTALL_FAILURES_METRIC = "updates.installed";
+    private static final String UPDATE_FAILURES_METRIC = "updates.failed";
+
     private static final Logger log = LoggerFactory.getLogger(ContentService.class);
 
     private static final String METADATA_MEDIATYPE = Metadata.MIME_TYPE, DB_MEDIATYPE = "application/x-sqlite3";
@@ -47,6 +55,9 @@ public class ContentService {
 
     @Autowired
     private ApplicationEventPublisher eventPublisher;
+
+    @Autowired
+    private CounterService counters;
 
     @Value("${app.data.dir}/cims-tablet.db")
     private File content;
@@ -69,6 +80,7 @@ public class ContentService {
 
     @Scheduled(fixedDelay = 30 * 60 * 1000, initialDelay = 5 * 60 * 1000)
     public void requestUpdate() {
+        counters.increment(UPDATE_REQUEST_METRIC);
         eventPublisher.publishEvent(new UpdateRequested(verified));
     }
 
@@ -97,6 +109,7 @@ public class ContentService {
             Content confirmed = new Content(contentHash, event.getContent(), event.getMetadata());
             return new ContentVerified(confirmed);
         } else {
+            counters.increment(VERIFY_FAILURES_METRIC);
             if (log.isWarnEnabled()) {
                 log.warn("content failed verification: expected {}, computed {}", encodeHexString(metadataHash), contentHash);
             }
@@ -118,6 +131,7 @@ public class ContentService {
         } else {
             log.warn("failed to move content: {} to {}", confirmed.getContentFile(), content);
         }
+        counters.increment(INSTALL_FAILURES_METRIC);
         return new SyncFailure("failure installing content, cleaning up", null, content.toPath(), metadata.toPath());
     }
 
@@ -173,6 +187,7 @@ public class ContentService {
 
     @EventListener
     public Object onMetadataFetched(MetadataFetched event) throws IOException, NoSuchAlgorithmException {
+        counters.increment(METADATA_FETCHES_METRIC);
         Metadata metadata = loadMetadata(event.getMetadata());
         log.info("incremental: {}", encodeHexString(metadata.getFileHash()));
         Path newDb = createTempFile(content.toPath().getParent(), "database-", ".db");
@@ -186,6 +201,7 @@ public class ContentService {
 
     @EventListener
     public ContentAvailable onDatabaseFetched(DatabaseFetched event) throws IOException, NoSuchAlgorithmException {
+        counters.increment(DATABASE_FETCHES_METRIC);
         if (log.isInfoEnabled()) {
             Metadata metadata = loadMetadata(event.getMetadata());
             log.info("full download: {}", encodeHexString(metadata.getFileHash()));
@@ -211,6 +227,7 @@ public class ContentService {
 
     @EventListener
     public void onSyncFailure(SyncFailure event) throws IOException {
+        counters.increment(UPDATE_FAILURES_METRIC);
         if (event.getFailure() != null) {
             log.warn(event.getMessage(), event.getFailure());
         } else {
