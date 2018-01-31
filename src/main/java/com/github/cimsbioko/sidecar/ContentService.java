@@ -176,10 +176,8 @@ public class ContentService {
                     }
                 }
                 break;
-            case SC_NOT_FOUND:
-                log.info("not found");
             default:
-                log.info("unknown response: {}", request.getResponseCode());
+                return new SyncFailure("unexpected response: " + request.getResponseCode());
         }
 
         return null;

@@ -8,6 +8,10 @@ public class SyncFailure implements FetchEvent {
     private final Throwable failure;
     private final Path[] tempFiles;
 
+    public SyncFailure(String message) {
+        this(message, null);
+    }
+
     public SyncFailure(String message, Throwable failure, Path... tempFiles) {
         this.message = message;
         this.failure = failure;
