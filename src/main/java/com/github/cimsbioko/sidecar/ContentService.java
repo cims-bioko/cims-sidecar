@@ -150,7 +150,7 @@ public class ContentService {
         switch (request.getResponseCode()) {
             case SC_NOT_MODIFIED:
                 log.info("no new content");
-                break;
+                return null;
             case SC_OK:
                 Path contentParent = content.toPath().getParent();
                 if (request.getContentType().contains(METADATA_MEDIATYPE)) {
@@ -171,13 +171,12 @@ public class ContentService {
                     } catch (NoSuchAlgorithmException | IOException e) {
                         return new SyncFailure("database fetch failed", e, newDb);
                     }
+                } else {
+                    return new SyncFailure("unknown content " + request.getContentType());
                 }
-                break;
             default:
                 return new SyncFailure("unexpected response: " + request.getResponseCode());
         }
-
-        return null;
     }
 
     @EventListener
