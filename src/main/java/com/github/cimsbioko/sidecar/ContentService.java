@@ -152,7 +152,7 @@ public class ContentService {
             case SC_NOT_MODIFIED:
                 counters.increment(UPDATE_NO_CHANGE_METRIC);
                 log.info("no new content");
-                return null;
+                return new SyncUnnecessary();
             case SC_OK:
                 Path contentParent = content.toPath().getParent();
                 if (request.getContentType().contains(METADATA_MEDIATYPE)) {
