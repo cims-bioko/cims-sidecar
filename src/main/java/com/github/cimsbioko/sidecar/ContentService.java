@@ -48,6 +48,7 @@ public class ContentService {
     private static final String VERIFY_FAILURES_METRIC = "updates.verified";
     private static final String INSTALL_FAILURES_METRIC = "updates.installed";
     private static final String UPDATE_FAILURES_METRIC = "updates.failed";
+    private static final String UPDATE_NO_CHANGE_METRIC = "updates.nochange";
 
     private static final Logger log = LoggerFactory.getLogger(ContentService.class);
 
@@ -149,6 +150,7 @@ public class ContentService {
 
         switch (request.getResponseCode()) {
             case SC_NOT_MODIFIED:
+                counters.increment(UPDATE_NO_CHANGE_METRIC);
                 log.info("no new content");
                 return null;
             case SC_OK:
