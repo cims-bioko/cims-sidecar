@@ -1,12 +1,14 @@
 package com.github.cimsbioko.sidecar;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.RequestMapping;
 
 @Controller
+@Profile("zeroconf")
 public class ZeroconfEndpoint {
 
     @Autowired
