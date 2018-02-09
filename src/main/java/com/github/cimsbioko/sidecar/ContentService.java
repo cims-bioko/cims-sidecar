@@ -176,39 +176,41 @@ public class ContentService {
     }
 
     @EventListener
-    public FetchEvent onUpdateRequested(UpdateRequested event) throws IOException {
-
-        Request request = getDownloadRequestFactory(event.getExisting()).create();
-
-        switch (request.getResponseCode()) {
-            case SC_NOT_MODIFIED:
-                log.info("no new content");
-                return new SyncUnnecessary();
-            case SC_OK:
-                Path contentParent = content.toPath().getParent();
-                if (request.getContentType().contains(METADATA_MEDIATYPE)) {
-                    log.info("fetching metadata");
-                    Path newMeta = createTempFile(contentParent, "metadata-", "." + Metadata.FILE_EXT);
-                    try {
-                        Files.copy(request.getInputStream(), newMeta, REPLACE_EXISTING);
-                        return new MetadataFetched(newMeta.toFile());
-                    } catch (IOException e) {
-                        return new SyncFailure("metadata fetch failed", e, newMeta);
+    public FetchEvent onUpdateRequested(UpdateRequested event) {
+        try {
+            Request request = getDownloadRequestFactory(event.getExisting()).create();
+            switch (request.getResponseCode()) {
+                case SC_NOT_MODIFIED:
+                    log.info("no new content");
+                    return new SyncUnnecessary();
+                case SC_OK:
+                    Path contentParent = content.toPath().getParent();
+                    if (request.getContentType().contains(METADATA_MEDIATYPE)) {
+                        log.info("fetching metadata");
+                        Path newMeta = createTempFile(contentParent, "metadata-", "." + Metadata.FILE_EXT);
+                        try {
+                            Files.copy(request.getInputStream(), newMeta, REPLACE_EXISTING);
+                            return new MetadataFetched(newMeta.toFile());
+                        } catch (IOException e) {
+                            return new SyncFailure("metadata fetch failed", e, newMeta);
+                        }
+                    } else if (request.getContentType().contains(DB_MEDIATYPE)) {
+                        log.info("fetching database");
+                        Path newDb = createTempFile(contentParent, "database-", ".db");
+                        try (MetadataInputWrapper wrapper = new MetadataInputWrapper(request.getInputStream(), "", 65536, "MD5", "MD5", contentParent.toFile())) {
+                            Files.copy(wrapper, newDb, REPLACE_EXISTING);
+                            return new DatabaseFetched(wrapper.getMetadataFile(), newDb.toFile());
+                        } catch (NoSuchAlgorithmException | IOException e) {
+                            return new SyncFailure("database fetch failed", e, newDb);
+                        }
+                    } else {
+                        return new SyncFailure("unknown content " + request.getContentType());
                     }
-                } else if (request.getContentType().contains(DB_MEDIATYPE)) {
-                    log.info("fetching database");
-                    Path newDb = createTempFile(contentParent, "database-", ".db");
-                    try (MetadataInputWrapper wrapper = new MetadataInputWrapper(request.getInputStream(), "", 65536, "MD5", "MD5", contentParent.toFile())) {
-                        Files.copy(wrapper, newDb, REPLACE_EXISTING);
-                        return new DatabaseFetched(wrapper.getMetadataFile(), newDb.toFile());
-                    } catch (NoSuchAlgorithmException | IOException e) {
-                        return new SyncFailure("database fetch failed", e, newDb);
-                    }
-                } else {
-                    return new SyncFailure("unknown content " + request.getContentType());
-                }
-            default:
-                return new SyncFailure("unexpected response: " + request.getResponseCode());
+                default:
+                    return new SyncFailure("unexpected response: " + request.getResponseCode());
+            }
+        } catch (IOException e) {
+            return new SyncFailure("io error handling update request", e);
         }
     }
 
@@ -242,14 +244,19 @@ public class ContentService {
     }
 
     @EventListener
-    public void onPrimaryChanged(ZeroconfPrimaryChanged event) throws MalformedURLException {
+    public void onPrimaryChanged(ZeroconfPrimaryChanged event) {
         if (event.isServicePrimary()) {
             sideloadUri = null;
         } else {
             ServiceInfo primary = event.getPrimaryServiceInfo();
             String[] primaryUrls = primary.getURLs();
             if (primaryUrls.length > 0) {
-                sideloadUri = new URL(primaryUrls[0]);
+                String url = primaryUrls[0];
+                try {
+                    sideloadUri = new URL(url);
+                } catch (MalformedURLException e) {
+                    log.warn("new primary has bad url: {}", url);
+                }
             } else {
                 log.warn("primary without urls: {}", primary);
             }
@@ -258,19 +265,23 @@ public class ContentService {
     }
 
     @EventListener
-    public void onSyncFailure(SyncFailure event) throws IOException {
+    public void onSyncFailure(SyncFailure event) {
         counters.increment(UPDATE_FAILURES_METRIC);
+        clearUpdating();
         if (event.getFailure() != null) {
             log.warn(event.getMessage(), event.getFailure());
         } else {
             log.warn(event.getMessage());
         }
-        cleanupFiles(event.getTempFiles());
-        clearUpdating();
+        try {
+            cleanupFiles(event.getTempFiles());
+        } catch (IOException e) {
+            log.warn("failed during cleanup", e);
+        }
     }
 
     @EventListener
-    public void onSyncUnncessary(SyncUnnecessary event) throws IOException {
+    public void onSyncUnncessary(SyncUnnecessary event) {
         counters.increment(UPDATE_NO_CHANGE_METRIC);
         clearUpdating();
     }
