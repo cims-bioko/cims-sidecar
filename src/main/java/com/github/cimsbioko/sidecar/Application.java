@@ -5,11 +5,13 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.embedded.EmbeddedServletContainerCustomizer;
 import org.springframework.boot.context.embedded.MimeMappings;
+import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.event.ApplicationEventMulticaster;
 import org.springframework.context.event.SimpleApplicationEventMulticaster;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.web.client.RestTemplate;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurerAdapter;
 
@@ -68,5 +70,12 @@ public class Application {
             mappings.add("jrsmd", "application/vnd.jrsync+jrsmd");
             container.setMimeMappings(mappings);
         };
+    }
+
+    @Bean
+    public RestTemplate restTemplate(@Value("${app.download.username}") String username,
+                                     @Value("${app.download.password}") String password,
+                                     RestTemplateBuilder builder) {
+        return builder.basicAuthorization(username, password).build();
     }
 }
