@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
@@ -15,6 +16,7 @@ import java.net.URI;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -44,14 +46,24 @@ public class CampaignService {
         return Arrays.asList(rest.getForEntity(downloadUri, Campaign[].class).getBody());
     }
 
+    @Scheduled(fixedDelay = 60 * 60 * 1000, initialDelay = 20 * 60 * 1000)
     public void updateCampaigns() {
+        List<Campaign> fetched = fetchCampaigns();
         Map<String, Campaign> oldCampaigns = campaigns,
-                newCampaigns = fetchCampaigns().stream().collect(Collectors.toMap(Campaign::getUuid, Function.identity()));
+                newCampaigns = fetched.stream().collect(Collectors.toMap(Campaign::getUuid, Function.identity()));
         if (!oldCampaigns.equals(newCampaigns)) {
-            log.info("campaigns updated: {}", newCampaigns);
-            campaigns = newCampaigns;
-            eventPublisher.publishEvent(new CampaignsUpdated(unmodifiableMap(oldCampaigns), unmodifiableMap(newCampaigns)));
+            log.info("campaign update: {}", fetched.stream().map(c -> String.format("%s (%s)", c.getUuid(), c.getName())).collect(Collectors.toList()));
+            campaigns = unmodifiableMap(newCampaigns);
+            eventPublisher.publishEvent(new CampaignsUpdated(unmodifiableMap(oldCampaigns), campaigns));
         }
+    }
+
+    public Optional<Campaign> getCampaign(String uuid) {
+        return Optional.ofNullable(campaigns.get(uuid));
+    }
+
+    public Iterable<Campaign> getCampaigns() {
+        return campaigns.values();
     }
 
     @EventListener

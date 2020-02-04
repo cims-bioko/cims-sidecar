@@ -6,7 +6,7 @@ import java.util.Map;
 
 public class CampaignsUpdated {
 
-    public final Map<String, Campaign> oldCampaigns, newCampaigns;
+    private final Map<String, Campaign> oldCampaigns, newCampaigns;
 
     public CampaignsUpdated(Map<String, Campaign> oldCampaigns, Map<String, Campaign> newCampaigns) {
         this.oldCampaigns = oldCampaigns;

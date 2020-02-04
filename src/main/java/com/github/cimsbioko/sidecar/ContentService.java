@@ -11,7 +11,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.actuate.metrics.CounterService;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -22,14 +21,15 @@ import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
-import java.net.MalformedURLException;
-import java.net.URL;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.Arrays;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static java.nio.file.Files.createTempFile;
 import static java.nio.file.Files.deleteIfExists;
@@ -62,16 +62,16 @@ public class ContentService {
     @Autowired
     private CounterService counters;
 
-    @Value("${app.data.dir}/cims-tablet.db")
-    private File content;
+    @Autowired
+    private CampaignService campaignService;
 
-    @Value("${app.data.dir}/cims-tablet.db." + Metadata.FILE_EXT)
-    private File metadata;
+    @Autowired
+    private FileSystem fs;
 
     @Value("${app.download.url}")
-    private URL downloadUri;
+    private URI downloadUri;
 
-    private URL sideloadUri;
+    private URI sideloadUri;
 
     @Value("${app.download.username}")
     private String username;
@@ -79,138 +79,179 @@ public class ContentService {
     @Value("${app.download.password}")
     private String password;
 
-    private Content verified;
+    private Map<Campaign, Content> verified = new ConcurrentHashMap<>();
 
-    private String updating;
+    private Map<Campaign, String> updating = new ConcurrentHashMap<>();
 
-    private boolean isUpdating() {
-        return updating != null;
+    private boolean isUpdating(Campaign campaign) {
+        return updating.get(campaign) != null;
     }
 
-    private void setUpdating(Content c) {
-        updating = c == null ? "missing content" : c.getContentHash();
+    private void setUpdating(Campaign campaign, Content content) {
+        updating.put(campaign, content == null ? "missing content" : content.getContentHash());
     }
 
-    private void clearUpdating() {
-        updating = null;
+    private void clearUpdating(Campaign campaign) {
+        updating.remove(campaign);
     }
 
     @Scheduled(fixedDelay = 30 * 60 * 1000, initialDelay = 5 * 60 * 1000)
     public void requestUpdate() {
         counters.increment(UPDATE_REQUEST_METRIC);
-        if (isUpdating()) {
-            log.info("update to {} in progress, ignoring update request", updating);
-            counters.increment(UPDATE_IGNORED_METRIC);
-        } else {
-            setUpdating(verified);
-            log.info("requesting update to {}", updating);
-            eventPublisher.publishEvent(new UpdateRequested(verified));
+        for (Campaign campaign : campaignService.getCampaigns()) {
+            requestUpdate(campaign);
         }
     }
 
-    public Content getContent() {
-        return verified;
+    private void requestUpdate(Campaign campaign) {
+        if (isUpdating(campaign)) {
+            log.info("update to {} ({}) in progress, ignoring update request", updating.get(campaign), campaign.getName());
+            counters.increment(UPDATE_IGNORED_METRIC);
+        } else {
+            setUpdating(campaign, verified.get(campaign));
+            log.info("requesting update to {} ({})", updating.get(campaign), campaign.getName());
+            eventPublisher.publishEvent(new UpdateRequested(campaign, verified.get(campaign)));
+        }
+    }
+
+    public Content getContent(Campaign campaign) {
+        return verified.get(campaign);
     }
 
     @EventListener
-    public Object onApplicationReady(ApplicationReadyEvent event) {
-        if (content.exists() && metadata.exists()) {
-            log.info("existing content available");
-            return new ContentAvailable(content, metadata);
-        } else {
-            log.info("existing content insufficient");
-            return new ContentMissing();
+    public void onCampaignUpdate(CampaignsUpdated event) {
+        cleanupCampaignContent(event.getOldCampaigns(), event.getNewCampaigns());
+        init();
+    }
+
+    private void init() {
+        for (Campaign campaign : campaignService.getCampaigns()) {
+            File content = fs.getContent(campaign), metadata = fs.getMetadata(campaign);
+            if (content.exists() && metadata.exists()) {
+                log.info("existing content available {} ({})", campaign.getUuid(), campaign.getName());
+                eventPublisher.publishEvent(new ContentAvailable(campaign, content, metadata));
+            } else {
+                log.info("existing content insufficient {} ({})", campaign.getUuid(), campaign.getName());
+                eventPublisher.publishEvent(new ContentMissing(campaign));
+            }
         }
+    }
+
+    private void cleanupCampaignContent(Map<String, Campaign> old, Map<String, Campaign> now) {
+        Set<Campaign> removed = new HashSet<>(old.values());
+        removed.removeAll(now.values());
+        for (Campaign c : removed) {
+            try {
+                log.info("cleaning up {} ({})", c.getUuid(), c.getName());
+                removeCampaign(c);
+            } catch (IOException e) {
+                log.warn("failed to cleanup content", e);
+            }
+        }
+    }
+
+    private void removeCampaign(Campaign c) throws IOException {
+        verified.remove(c);
+        cleanupFiles(fs.getContent(c).toPath(), fs.getMetadata(c).toPath());
     }
 
     @EventListener
     public void onContentMissing(ContentMissing event) {
-        requestUpdate();
+        requestUpdate(event.getCampaign());
     }
 
     @EventListener
     public Object onContentAvailable(ContentAvailable event) {
+        Campaign campaign = event.getCampaign();
         try {
             Metadata metadata = loadMetadata(event.getMetadata());
             byte[] metadataHash = metadata.getFileHash(), computedHash = computeHash(event.getContent(), metadata.getFileHashAlg());
             String contentHash = encodeHexString(computedHash);
             if (Arrays.equals(metadataHash, computedHash)) {
-                log.info("content verified");
+                log.info("content verified {} ({})", campaign.getUuid(), campaign.getName());
                 Content confirmed = new Content(contentHash, event.getContent(), event.getMetadata());
-                return new ContentVerified(confirmed);
+                return new ContentVerified(campaign, confirmed);
             } else {
                 counters.increment(VERIFY_FAILURES_METRIC);
                 if (log.isWarnEnabled()) {
-                    log.warn("content failed verification: expected {}, computed {}", encodeHexString(metadataHash), contentHash);
+                    log.warn("content failed verification {} ({}): expected {}, computed {}",
+                            campaign.getUuid(), campaign.getName(), encodeHexString(metadataHash), contentHash);
                 }
-                return new SyncFailure("content verification failed, cleaning up", null,
+                return new SyncFailure(event.getCampaign(), "content verification failed, cleaning up", null,
                         event.getContent().toPath(), event.getMetadata().toPath());
             }
         } catch (Exception e) {
-            return new SyncFailure("content verification failed", e);
+            return new SyncFailure(event.getCampaign(), "content verification failed", e);
         }
     }
 
     @EventListener
     public Object onContentVerified(ContentVerified event) {
-        log.info("installing content {}", event.getContent().getContentHash());
+        Campaign campaign = event.getCampaign();
         Content confirmed = event.getContent();
+        log.info("installing content {} ({}), hash: {}", campaign.getUuid(), campaign.getName(), confirmed.getContentHash());
+        File content = fs.getContent(campaign), metadata = fs.getMetadata(campaign);
         if (confirmed.getContentFile().renameTo(content)) {
             if (confirmed.getMetadataFile().renameTo(metadata)) {
-                return new ContentReady(new Content(confirmed.getContentHash(), content, metadata));
+                return new ContentReady(campaign, new Content(confirmed.getContentHash(), content, metadata));
             } else {
-                log.warn("failed to move metadata: {} to {}", confirmed.getMetadataFile(), metadata);
+                log.warn("failed to move metadata {} ({}): {} to {}",
+                        campaign.getUuid(), campaign.getName(), confirmed.getMetadataFile(), metadata);
             }
         } else {
-            log.warn("failed to move content: {} to {}", confirmed.getContentFile(), content);
+            log.warn("failed to move content {} ({}): {} to {}",
+                    campaign.getUuid(), campaign.getName(), confirmed.getContentFile(), content);
         }
         counters.increment(INSTALL_FAILURES_METRIC);
-        return new SyncFailure("failure installing content, cleaning up", null, content.toPath(), metadata.toPath());
+        return new SyncFailure(campaign, "failure installing content, cleaning up", null, content.toPath(), metadata.toPath());
     }
 
     @EventListener
     public void onContentReady(ContentReady event) {
-        log.info("publishing content {}", event.getContent().getContentHash());
-        verified = event.getContent();
-        clearUpdating();
+        Campaign campaign = event.getCampaign();
+        Content content = event.getContent();
+        log.info("publishing content {} ({}), hash: {}", campaign.getUuid(), campaign.getName(), content.getContentHash());
+        verified.put(campaign, content);
+        clearUpdating(campaign);
     }
 
     @EventListener
     public FetchEvent onUpdateRequested(UpdateRequested event) {
+        Campaign campaign = event.getCampaign();
         try {
-            Request request = getDownloadRequestFactory(event.getExisting()).create();
+            Request request = getDownloadRequestFactory(campaign, event.getExisting()).create();
             switch (request.getResponseCode()) {
                 case SC_NOT_MODIFIED:
-                    log.info("no new content");
-                    return new SyncUnnecessary();
+                    log.info("no new content {} ({})", campaign.getUuid(), campaign.getName());
+                    return new SyncUnnecessary(campaign);
                 case SC_OK:
-                    Path contentParent = content.toPath().getParent();
+                    Path contentParent = fs.getContent(campaign).toPath().getParent();
                     if (request.getContentType().contains(METADATA_MEDIATYPE)) {
-                        log.info("fetching metadata");
+                        log.info("fetching metadata {} ({})", campaign.getUuid(), campaign.getName());
                         Path newMeta = createTempFile(contentParent, "metadata-", "." + Metadata.FILE_EXT);
                         try {
                             Files.copy(request.getInputStream(), newMeta, REPLACE_EXISTING);
-                            return new MetadataFetched(newMeta.toFile());
+                            return new MetadataFetched(campaign, newMeta.toFile());
                         } catch (IOException e) {
-                            return new SyncFailure("metadata fetch failed", e, newMeta);
+                            return new SyncFailure(campaign, "metadata fetch failed", e, newMeta);
                         }
                     } else if (request.getContentType().contains(DB_MEDIATYPE)) {
-                        log.info("fetching database");
+                        log.info("fetching database {} ({})", campaign.getUuid(), campaign.getName());
                         Path newDb = createTempFile(contentParent, "database-", ".db");
                         try (MetadataInputWrapper wrapper = new MetadataInputWrapper(request.getInputStream(), "", 65536, "MD5", "MD5", contentParent.toFile())) {
                             Files.copy(wrapper, newDb, REPLACE_EXISTING);
-                            return new DatabaseFetched(wrapper.getMetadataFile(), newDb.toFile());
+                            return new DatabaseFetched(campaign, wrapper.getMetadataFile(), newDb.toFile());
                         } catch (NoSuchAlgorithmException | IOException e) {
-                            return new SyncFailure("database fetch failed", e, newDb);
+                            return new SyncFailure(campaign, "database fetch failed", e, newDb);
                         }
                     } else {
-                        return new SyncFailure("unknown content " + request.getContentType());
+                        return new SyncFailure(campaign, "unknown content " + request.getContentType());
                     }
                 default:
-                    return new SyncFailure("unexpected response: " + request.getResponseCode());
+                    return new SyncFailure(campaign, "unexpected response: " + request.getResponseCode());
             }
         } catch (IOException e) {
-            return new SyncFailure("io error handling update request", e);
+            return new SyncFailure(campaign, "io error handling update request", e);
         }
     }
 
@@ -218,28 +259,32 @@ public class ContentService {
     public Object onMetadataFetched(MetadataFetched event) {
         counters.increment(METADATA_FETCHES_METRIC);
         Path newDb = null;
+        Campaign campaign = event.getCampaign();
         try {
             Metadata metadata = loadMetadata(event.getMetadata());
-            log.info("incremental: {}", encodeHexString(metadata.getFileHash()));
-            newDb = createTempFile(content.toPath().getParent(), "database-", ".db");
-            ZSync.sync(metadata, content, newDb.toFile(), getSyncRequestFactory());
-            return new ContentAvailable(newDb.toFile(), event.getMetadata());
+            log.info("incremental {} ({}): hash {}",
+                    campaign.getUuid(), campaign.getName(), encodeHexString(metadata.getFileHash()));
+            newDb = createTempFile(fs.getContent(campaign).toPath().getParent(), "database-", ".db");
+            ZSync.sync(metadata, fs.getContent(campaign), newDb.toFile(), getSyncRequestFactory(campaign));
+            return new ContentAvailable(campaign, newDb.toFile(), event.getMetadata());
         } catch (Exception e) {
-            return newDb != null ? new SyncFailure("sync failed", e, newDb) : new SyncFailure("sync failed", e);
+            return newDb != null ? new SyncFailure(campaign, "sync failed", e, newDb) : new SyncFailure(campaign, "sync failed", e);
         }
     }
 
     @EventListener
     public Object onDatabaseFetched(DatabaseFetched event) {
         counters.increment(DATABASE_FETCHES_METRIC);
+        Campaign campaign = event.getCampaign();
         try {
             if (log.isInfoEnabled()) {
                 Metadata metadata = loadMetadata(event.getMetadata());
-                log.info("full download: {}", encodeHexString(metadata.getFileHash()));
+                log.info("full download {} ({}): hash {}",
+                        campaign.getUuid(), campaign.getName(), encodeHexString(metadata.getFileHash()));
             }
-            return new ContentAvailable(event.getDatabase(), event.getMetadata());
+            return new ContentAvailable(campaign, event.getDatabase(), event.getMetadata());
         } catch (Exception e) {
-            return new SyncFailure("sync failed", e);
+            return new SyncFailure(campaign, "sync failed", e);
         }
     }
 
@@ -253,21 +298,21 @@ public class ContentService {
             if (primaryUrls.length > 0) {
                 String url = primaryUrls[0];
                 try {
-                    sideloadUri = new URL(url);
-                } catch (MalformedURLException e) {
+                    sideloadUri = new URI(url);
+                } catch (URISyntaxException e) {
                     log.warn("new primary has bad url: {}", url);
                 }
             } else {
                 log.warn("primary without urls: {}", primary);
             }
         }
-        log.info("zeroconf change, sync endpoint: {}", getURL());
+        log.info("zeroconf change, sync endpoint: {}", getURI());
     }
 
     @EventListener
     public void onSyncFailure(SyncFailure event) {
         counters.increment(UPDATE_FAILURES_METRIC);
-        clearUpdating();
+        clearUpdating(event.getCampaign());
         if (event.getFailure() != null) {
             log.warn(event.getMessage(), event.getFailure());
         } else {
@@ -283,7 +328,7 @@ public class ContentService {
     @EventListener
     public void onSyncUnncessary(SyncUnnecessary event) {
         counters.increment(UPDATE_NO_CHANGE_METRIC);
-        clearUpdating();
+        clearUpdating(event.getCampaign());
     }
 
     private void cleanupFiles(Path... filesToRemove) throws IOException {
@@ -296,25 +341,29 @@ public class ContentService {
         }
     }
 
-    private URL getURL() {
+    private URI getURI() {
         return sideloadUri != null ? sideloadUri : downloadUri;
+    }
+
+    private URI getURI(Campaign campaign) {
+        return getURI().resolve(campaign.getUuid());
     }
 
     private String getCreds() {
         return sideloadUri != null ? null : getBasicAuthCreds(username, password);
     }
 
-    private RequestFactory getDownloadRequestFactory(Content existing) {
+    private RequestFactory getDownloadRequestFactory(Campaign campaign, Content existing) {
         if (existing != null) {
             String accept = String.join(", ", METADATA_MEDIATYPE, DB_MEDIATYPE);
-            return new RequestFactory(getURL(), accept, getCreds(), existing.getContentHash());
+            return new RequestFactory(getURI(campaign), accept, getCreds(), existing.getContentHash());
         } else {
-            return new RequestFactory(getURL(), DB_MEDIATYPE, getCreds());
+            return new RequestFactory(getURI(campaign), DB_MEDIATYPE, getCreds());
         }
     }
 
-    private RequestFactory getSyncRequestFactory() {
-        return new RequestFactory(getURL(), DB_MEDIATYPE, getCreds());
+    private RequestFactory getSyncRequestFactory(Campaign campaign) {
+        return new RequestFactory(getURI(campaign), DB_MEDIATYPE, getCreds());
     }
 
     private byte[] computeHash(File content, String fileHashAlg) throws NoSuchAlgorithmException, IOException {

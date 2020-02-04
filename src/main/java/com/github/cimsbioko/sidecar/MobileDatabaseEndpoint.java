@@ -6,9 +6,7 @@ import org.springframework.boot.actuate.metrics.CounterService;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.stereotype.Controller;
 import org.springframework.util.StreamUtils;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
-import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.bind.annotation.*;
 import org.springframework.web.context.request.WebRequest;
 
 import javax.servlet.http.HttpServletResponse;
@@ -34,31 +32,34 @@ public class MobileDatabaseEndpoint {
     private static final String EXPORTS_FINISHED_METRIC = "exports.finished";
 
     private static final String ACCEPT = "Accept";
-    private static final String MOBILEDB_PATH = "/api/rest/mobiledb";
+    private static final String MOBILEDB_PATH = "/api/rest/mobiledb/{campaign}";
     private static final String SQLITE_MIME_TYPE = "application/x-sqlite3";
-    private static final String MOBILEDB_EXPORT_PATH = "/api/rest/mobiledb/export";
+    private static final String MOBILEDB_EXPORT_PATH = "/api/rest/mobiledb/{campaign}/export";
     private static final String INSTALLABLE_FILENAME = "openhds.db";
 
     @Autowired
-    private ContentService manager;
+    private ContentService contentService;
+
+    @Autowired
+    private CampaignService campaignService;
 
     @Autowired
     private CounterService counters;
 
-    @RequestMapping(value = "/update", method = RequestMethod.GET)
+    @GetMapping("/update")
     @ResponseBody
     public String requestUpdate() {
-        manager.requestUpdate();
+        contentService.requestUpdate();
         counters.increment(DB_UPDATES_METRIC);
         return null;
     }
 
-    @RequestMapping(value = MOBILEDB_PATH, method = RequestMethod.GET, produces = {SQLITE_MIME_TYPE, Metadata.MIME_TYPE})
-    public String mobileDB(WebRequest request) {
+    @GetMapping(value = MOBILEDB_PATH, produces = {SQLITE_MIME_TYPE, Metadata.MIME_TYPE})
+    public String mobileDB(@PathVariable String campaign, WebRequest request) {
 
         counters.increment(DB_DOWNLOADS_METRIC);
 
-        Content content = manager.getContent();
+        Content content = campaignService.getCampaign(campaign).map(contentService::getContent).orElse(null);
 
         if (content == null) {
             counters.increment(DB_NO_CONTENT_METRIC);
@@ -81,12 +82,12 @@ public class MobileDatabaseEndpoint {
         return "forward:" + CACHED_FILES_PATH + "/" + content.getContentFile().getName();
     }
 
-    @RequestMapping(value = MOBILEDB_EXPORT_PATH, method = RequestMethod.GET)
-    public void browserExport(HttpServletResponse response) throws IOException {
+    @GetMapping(MOBILEDB_EXPORT_PATH)
+    public void browserExport(@PathVariable String campaign, HttpServletResponse response) throws IOException {
 
         counters.increment(EXPORTS_METRIC);
 
-        Content content = manager.getContent();
+        Content content = campaignService.getCampaign(campaign).map(contentService::getContent).orElse(null);
 
         if (content == null || content.getContentFile() == null || !content.getContentFile().exists()) {
             counters.increment(EXPORTS_NO_CONTENT_METRIC);
