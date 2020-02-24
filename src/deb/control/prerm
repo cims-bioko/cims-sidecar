@@ -1,0 +1,48 @@
+#!/bin/sh
+
+set -e
+
+USER=cims-sidecar
+HOME=/opt/$USER
+APP=$USER
+APP_JAR=$HOME/$APP.jar
+INIT_SCRIPT=/etc/init.d/$APP
+CONF_FILE=$HOME/application.properties
+ETC_CONF_DIR=/etc/$APP
+ETC_CONF_FILE=$ETC_CONF_DIR/$APP.properties
+DATA_DIR=/var/lib/$APP
+
+if [ "$1" = "upgrade" -o "$1" = "remove" ]
+then
+  service $APP stop
+  update-rc.d $APP remove
+  if [ -L $INIT_SCRIPT ]
+  then
+    unlink $INIT_SCRIPT
+  fi
+
+  if [ -e $APP_JAR ]
+  then
+    chattr -i $APP_JAR
+    rm $APP_JAR
+  fi
+
+  if [ -L $ETC_CONF_FILE ]
+  then
+    unlink $ETC_CONF_FILE
+  fi
+
+  if [ -e $CONF_FILE ]
+  then
+    rm $CONF_FILE
+  fi
+
+  if [ -d $DATA_DIR ]
+  then
+    rm $DATA_DIR/*
+    rmdir $DATA_DIR
+  fi
+  
+fi
+
+exit 0

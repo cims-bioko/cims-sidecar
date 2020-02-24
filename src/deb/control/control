@@ -1,0 +1,8 @@
+Package: [[artifactId]]
+Version: [[version]]
+Section: net
+Priority: optional
+Architecture: all
+Depends: openjdk-8-jre-headless (>= 1.8), avahi-daemon
+Maintainer: Brent Atkinson <brent.atkinson@gmail.com>
+Description: [[description]]

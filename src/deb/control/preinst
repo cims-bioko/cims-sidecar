@@ -1,0 +1,20 @@
+#!/bin/sh
+
+set -e
+
+USER=cims-sidecar
+HOMEDIR=/opt/$USER
+
+case "$1" in
+
+  install)
+
+  # Add user if it doesn't already exist
+  if ! getent passwd ${USER} >/dev/null 2>&1
+  then
+    useradd --system --user-group --home-dir ${HOMEDIR} --shell /sbin/nologin ${USER}
+  fi
+  
+esac
+
+exit 0

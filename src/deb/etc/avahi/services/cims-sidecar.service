@@ -1,0 +1,11 @@
+<service-group>
+
+  <name replace-wildcards="yes">sidecar on %h</name>
+
+  <service>
+    <type>_cimssc._tcp</type>
+    <port>8080</port>
+  </service>
+
+</service-group>
+

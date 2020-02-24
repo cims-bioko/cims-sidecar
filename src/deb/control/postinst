@@ -1,0 +1,53 @@
+#!/bin/sh
+
+set -e
+
+USER=cims-sidecar
+HOME=/opt/$USER
+APP=$USER
+APP_JAR=$HOME/$APP.jar
+INIT_SCRIPT=/etc/init.d/$APP
+CONF_FILE=$HOME/application.properties
+ETC_CONF_DIR=/etc/$APP
+ETC_CONF_FILE=$ETC_CONF_DIR/$APP.properties
+DATA_DIR=/var/lib/$APP
+
+case "$1" in
+
+  configure)
+
+    if [ -e $APP_JAR ]
+    then
+      chown $USER.$USER $APP_JAR 
+      chmod 500 $APP_JAR
+      chattr +i $APP_JAR
+    fi
+
+    if [ -e $CONF_FILE ]
+    then
+      chown root.$USER $CONF_FILE
+      chmod 440 $CONF_FILE
+      if [ -d $ETC_CONF_DIR -a ! -e $ETC_CONF_FILE ]
+      then
+        ln -s $CONF_FILE $ETC_CONF_FILE
+      fi
+    fi
+
+    if [ -e $APP_JAR -a ! -e $INIT_SCRIPT ]
+    then
+      ln -s $APP_JAR $INIT_SCRIPT
+      update-rc.d $APP defaults
+      service $APP start
+    fi
+
+    if [ -d $DATA_DIR ]
+    then
+      chown root.$USER $DATA_DIR
+      chmod 770 $DATA_DIR
+    fi
+    ;;
+
+esac
+
+exit 0
+
