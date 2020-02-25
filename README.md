@@ -1,14 +1,12 @@
 # CIMS Sidecar
 
-A zero-configuration service to assist with tablet synchronization on LANs. It
-is especially useful when attempting to synchronize a large number of tablets
-with a sizable remote database.
+A zero-configuration service to assist with tablet synchronization on LANs. It is especially useful when attempting to 
+synchronize a large number of tablets with a sizable remote database.
 
 
 ## Building
 
-You need Java 8+ and Apache Maven to build the project. After that, building the
-project is as simple as:
+You need Java 8+ and Apache Maven to build the project. After that, building the project is as simple as:
 
 ```shell
 # Build the the application jar
@@ -35,7 +33,7 @@ the avahi zeroconf service. To start the service with the embedded zeroconf serv
 java -Dspring.profiles.active=zeroconf -jar cims-sidecar-<version>.jar
 ```
 
-## Running in production (like Ubuntu, Raspbian, or Armbian)
+## Running in production on Debian-based Linux (such as Ubuntu, Raspbian, or Armbian)
 
 While running the service manually is helpful during development and testing, the service is really meant to run 
 reliably in real production environments. If the power goes out, you will want to be sure that the service comes back 
@@ -50,9 +48,9 @@ mvn clean package
 dpgk -i target/cims-<version>_all.deb
 ```
 
-This will install the package on the same machine you built it on. The package is portable, so you can transfer the .deb
-file to another machine and install with dpkg as well. Once you install the package, the service will start 
-automatically. However, it likely will need to be configured before it will function properly.
+This will install the package on the same machine you built it on. The package is portable across CPU architectures, 
+so you can transfer the .deb file to another machine and install with dpkg as well. Once you install the package, the 
+service will start automatically. However, it will need to be configured to function properly.
 
 ### Configuring the service
 
@@ -77,9 +75,9 @@ cims.server.url=https://another-server-url/
 
 #### Configuring the username and password
 
-The default username and password used when contacting the server are not meant to be usable. You need to configure a 
-new user on your CIMS server and assign it a role that contains the MOBILE_SYNC permission. Then, assign that user to 
-campaigns you wish to sync to the sidecar. Finally, configure sidecar to use that user account in 
+The default username and password used when contacting the server are unusable. You need to configure a new user on your
+CIMS server and assign it a role that contains the MOBILE_SYNC permission. Then, assign that user to campaigns you wish 
+to sync to the sidecar. Finally, configure sidecar to use the user account in 
 /etc/cims-sidecar/cims-sidecar.properties:
 
 ```properties
@@ -96,9 +94,9 @@ app.download.password=your-password
 
 #### Configure avahi/zeroconf
 
-By default, the debian package installs an avahi service definition that advertises the cims-sidecar service on port
-8080, which matches the configuration in /etc/cims-sidecar/cims-sidecar.properties by default. If you change the server
-port to something other than 8080 you will need to update this configuration to match. To do that, edit 
+By default, the debian package installs an avahi service definition that advertises the cims-sidecar service on TCP port
+8080, matching the default configuration in /etc/cims-sidecar/cims-sidecar.properties. If you change the server port to
+something else you need to update this configuration to match. To do that, edit
 /etc/avahi/services/cims-sidecar.service:
 
 ```xml
@@ -114,9 +112,9 @@ port to something other than 8080 you will need to update this configuration to 
 
 ### Starting and stopping the service
 
-The debian package installs sidecar as a service as a System V init script. This allows the system (and you) to run the
-sidecar service like any built-in service on linux. For example, the following commands show how to stop, start, and 
-restart the service:
+The debian package installs sidecar as a System V init service. This allows the system (and you) to run the sidecar 
+service like any built-in service on linux. For example, the following commands show how to stop, start, and restart the
+service:
 
 ```shell
 # Stop the sidecar service
